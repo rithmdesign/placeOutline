@@ -1,45 +1,63 @@
 package main
 
 import (
-	"html/template"
-	"io/ioutil"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 )
 
-var templates = template.Must(template.ParseGlob("templates/*.html"))
-
 func main() {
-	http.HandleFunc("/", indexHandler)
-	http.HandleFunc("/api/geojson", geoJSONHandler)
+	port := "3001"
 
-	fs := http.FileServer(http.Dir("static"))
-	http.Handle("/static/", http.StripPrefix("/static/", fs))
+	// Define the API endpoint handler
+	http.HandleFunc("/api/geojson/", func(w http.ResponseWriter, r *http.Request) {
+		// Enable CORS
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
-	log.Println("Server running on http://localhost:3000")
-	log.Fatal(http.ListenAndServe(":3000", nil))
-}
+		// Handle preflight requests
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 
-func indexHandler(w http.ResponseWriter, r *http.Request) {
-	templates.ExecuteTemplate(w, "layout.html", nil)
-}
+		// Only allow GET requests
+		if r.Method != "GET" {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 
-func geoJSONHandler(w http.ResponseWriter, r *http.Request) {
-	place := r.URL.Query().Get("place")
-	if place == "" {
-		http.Error(w, "Missing place", http.StatusBadRequest)
-		return
-	}
+		// Extract the place name from the URL
+		pathParts := strings.Split(r.URL.Path, "/")
+		if len(pathParts) < 3 {
+			http.Error(w, "Invalid URL", http.StatusBadRequest)
+			return
+		}
 
-	filePath := filepath.Join("data", "geojson", strings.ToLower(place)+".geojson")
-	data, err := ioutil.ReadFile(filePath)
-	if err != nil {
-		http.Error(w, "GeoJSON not found", http.StatusNotFound)
-		return
-	}
+		placeName := strings.ToLower(pathParts[len(pathParts)-1])
+		filePath := filepath.Join("data", "geojson", fmt.Sprintf("%s.geojson", placeName))
 
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(data)
+		// Read the GeoJSON file
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			// Return a 404 if the file doesn't exist
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": "GeoJSON not found"})
+			return
+		}
+
+		// Set content type and return the JSON data
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
+	})
+
+	// Start the server
+	fmt.Printf("Server running at http://localhost:%s\n", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
